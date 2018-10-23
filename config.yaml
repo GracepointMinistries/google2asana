@@ -1,0 +1,7 @@
+workspace_name: "domain.org"
+email_prefix_filter: "_"
+admin_alias: "admins@domain.org"
+google_pem_path: "~/.credentials/asanaSync.pem"
+google_pem_email: "googlegroup@googlegroup.iam.gserviceaccount.com"
+google_pem_subject: "domain_admin@domain.org"
+mysql_config: "dbuser:password@/db_name"
