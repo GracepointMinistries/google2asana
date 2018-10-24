@@ -10,6 +10,7 @@ import (
 
 	"github.com/fitzboy/asana/v1"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/kelseyhightower/envconfig"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/oauth2/jwt"
@@ -20,23 +21,24 @@ import (
 type Config struct {
 
 	// the API key given by Asana
-	AsanaPersonalAccessToken string `yaml:"asana_personal_access_token"`
+	AsanaPersonalAccessToken string `yaml:"asana_personal_access_token" envconfig:"asana_personal_access_token"`
 	// the Workspace name within Asana (ie the "org name")
-	WorkspaceName string `yaml:"workspace_name"`
+	WorkspaceName string `yaml:"workspace_name" envconfig:"workspace_name"`
 
 	// user/password/db to use for mysql DB that has the asanaSyncLog
-	MysqlConfig *string `yaml:"mysql_config"`
+	MysqlConfig *string `yaml:"mysql_config" envconfig:"mysql_config"`
 
 	// these are the settings for Google oauth2 to work
-	GooglePemPath    string `yaml:"google_pem_path"`
-	GooglePemEmail   string `yaml:"google_pem_email"`
-	GooglePemSubject string `yaml:"google_pem_subject"`
+	GooglePemPath    *string `yaml:"google_pem_path" envconfig:"google_pem_path"`
+	GooglePemValue   string  `yaml:"google_pem_value" envconfig:"google_pem_value"`
+	GooglePemEmail   string  `yaml:"google_pem_email" envconfig:"google_pem_email"`
+	GooglePemSubject string  `yaml:"google_pem_subject" envconfig:"google_pem_subject"`
 
 	// in google groups, if you want to exclude users with a certain prefix, put it here
-	EmailPrefixFilter string `yaml:"email_prefix_filter"`
+	EmailPrefixFilter string `yaml:"email_prefix_filter" envconfig:"email_prefix_filter"`
 
 	// a google group alias that has members you wish to be admin on ALL asana teams
-	AdminAlias string `yaml:"admin_alias"`
+	AdminAlias string `yaml:"admin_alias" envconfig:"admin_alias"`
 }
 
 type PermSetter struct {
@@ -81,14 +83,17 @@ func NewPermSetter(conf Config) (*PermSetter, error) {
 		return nil, err
 	}
 
-	b, err := ioutil.ReadFile(conf.GooglePemPath)
-	if err != nil {
-		return nil, err
+	if conf.GooglePemPath != nil {
+		b, err := ioutil.ReadFile(*conf.GooglePemPath)
+		if err != nil {
+			return nil, err
+		}
+		conf.GooglePemValue = string(b)
 	}
 
 	gconf := &jwt.Config{
 		Email:      conf.GooglePemEmail,
-		PrivateKey: b,
+		PrivateKey: []byte(conf.GooglePemValue),
 		Subject:    conf.GooglePemSubject,
 		Scopes: []string{
 			"https://www.googleapis.com/auth/admin.directory.group",
@@ -129,15 +134,17 @@ func main() {
 	flag.Parse()
 
 	if *configPath == "" {
-		log.Fatalf("must specify the path to the config file (--config config-file)")
-	}
-
-	b, err := ioutil.ReadFile(*configPath)
-	if err != nil {
-		log.Fatalf("couldn't read in config file")
-	}
-	if err := yaml.Unmarshal(b, &conf); err != nil {
-		log.Fatalf("unable to unmarshal config yaml file, err: %v", err)
+		if err := envconfig.Process("asanasync", &conf); err != nil {
+			log.Fatalf("must specify the path to the config file (--config config-file) or env variables, err: %v", err)
+		}
+	} else {
+		b, err := ioutil.ReadFile(*configPath)
+		if err != nil {
+			log.Fatalf("couldn't read in config file")
+		}
+		if err := yaml.Unmarshal(b, &conf); err != nil {
+			log.Fatalf("unable to unmarshal config yaml file, err: %v", err)
+		}
 	}
 
 	ps, err := NewPermSetter(conf)

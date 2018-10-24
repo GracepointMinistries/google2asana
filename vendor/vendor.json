@@ -21,6 +21,12 @@
 			"revisionTime": "2018-10-01T07:22:39Z"
 		},
 		{
+			"checksumSHA1": "WYgvNuGj5g1sej4dJWBHF5bSKGE=",
+			"path": "github.com/kelseyhightower/envconfig",
+			"revision": "dd1402a4d99de9ac2f396cd6fcb957bc2c695ec1",
+			"revisionTime": "2018-05-17T19:45:57Z"
+		},
+		{
 			"checksumSHA1": "X/uSzWg6MnUfD9/PMeBuQ/xSox4=",
 			"path": "github.com/odeke-em/go-uuid",
 			"revision": "b211d769a9aaba5b2b8bdbab5de3c227116f3c39",
