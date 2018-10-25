@@ -180,6 +180,10 @@ func (ps *PermSetter) SetPermsForTeams() error {
 			belong := make(map[string]bool)
 			for alias, _ := range ps.aliasesPerTeam[teamID] {
 				if err := ps.GetGoogleGroupMembership(alias, belong); err != nil {
+					if strings.Contains(err.Error(), "Resource Not Found: groupKey, notFound") {
+						log.Printf("unable to find google group for %s\n", alias)
+						continue
+					}
 					log.Fatal(err)
 				}
 			}
