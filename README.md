@@ -23,6 +23,7 @@ ASANASYNC_GOOGLE_PEM_SUBJECT=domain_admin@domain.org
 ASANASYNC_MYSQL_CONFIG=dbuser:password@/db_name
 ASANASYNC_ASANA_PERSONAL_ACCESS_TOKEN=0/9acc...
 ASANASYNC_GOOGLE_PEM_VALUE=Bag Attributes friendlyName: privatekey...`
+for MYSQL_CONFIG, description of format is [here](https://github.com/go-sql-driver/mysql#dsn-data-source-name)
 
 ## Future improvements:
 Check descriptions for workspaces and projects and add any aliases in there to permission for said workspace or project (but no need to add entries for folks already in a higher level)

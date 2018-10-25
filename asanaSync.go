@@ -175,49 +175,59 @@ func main() {
 }
 
 func (ps *PermSetter) SetPermsForTeams() error {
-	for teamID, _ := range ps.teams {
-		belong := make(map[string]bool)
-		for alias, _ := range ps.aliasesPerTeam[teamID] {
-			if err := ps.GetGoogleGroupMembership(alias, belong); err != nil {
+	for tID, _ := range ps.teams {
+		setTeam := func(teamID int64) error {
+			belong := make(map[string]bool)
+			for alias, _ := range ps.aliasesPerTeam[teamID] {
+				if err := ps.GetGoogleGroupMembership(alias, belong); err != nil {
+					log.Fatal(err)
+				}
+			}
+			for d, _ := range ps.admins {
+				belong[d] = true
+			}
+
+			current := make(map[string]bool)
+			if err := ps.FetchUsersForTeam(teamID, current); err != nil {
 				log.Fatal(err)
 			}
-		}
-		for d, _ := range ps.admins {
-			belong[d] = true
-		}
 
-		current := make(map[string]bool)
-		if err := ps.FetchUsersForTeam(teamID, current); err != nil {
-			log.Fatal(err)
-		}
-
-		for b, _ := range belong {
-			if _, ok := current[b]; !ok {
-				if err := ps.AddMemberToAsanaTeam(b, teamID); err != nil {
-					continue
-				}
-				current[b] = true
-				if err := ps.LogAddition(b, teamID); err != nil {
-					log.Fatal(err)
-				}
-			}
-		}
-
-		for cur, _ := range current {
-			if _, ok := belong[cur]; !ok {
-				ans, err := ps.IsLogged(ps.emailToUserID[cur], teamID)
-				if err != nil {
-					log.Fatal(err)
-				}
-				if ans {
-					if err := ps.RemoveFromLog(cur, teamID); err != nil {
-						continue
+			for b, _ := range belong {
+				if _, ok := current[b]; !ok {
+					if err := ps.AddMemberToAsanaTeam(b, teamID); err != nil {
+						if strings.Contains(err.Error(), "only_team_members_can_add_members") {
+							return nil
+						} else {
+							return err
+						}
 					}
-					if err := ps.RemoveMemberFromAsanaTeam(cur, teamID); err != nil {
+					current[b] = true
+					if err := ps.LogAddition(b, teamID); err != nil {
 						log.Fatal(err)
 					}
 				}
 			}
+
+			for cur, _ := range current {
+				if _, ok := belong[cur]; !ok {
+					ans, err := ps.IsLogged(ps.emailToUserID[cur], teamID)
+					if err != nil {
+						log.Fatal(err)
+					}
+					if ans {
+						if err := ps.RemoveFromLog(cur, teamID); err != nil {
+							return nil
+						}
+						if err := ps.RemoveMemberFromAsanaTeam(cur, teamID); err != nil {
+							log.Fatal(err)
+						}
+					}
+				}
+			}
+			return nil
+		}
+		if err := setTeam(tID); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -285,7 +295,7 @@ func (ps *PermSetter) FetchTeams() error {
 							ps.aliasesPerTeam[team.ID] = make(map[string]bool)
 						}
 						ps.aliasesPerTeam[team.ID][sub[7:]] = true
-						log.Printf("adding alias %s to teamID %s", sub[7:], team.ID)
+						log.Printf("adding alias %s to teamID %d", sub[7:], team.ID)
 					}
 				}
 			}
