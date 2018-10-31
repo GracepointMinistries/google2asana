@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"strings"
+	"unicode"
 
 	"github.com/fitzboy/asana/v1"
 	_ "github.com/go-sql-driver/mysql"
@@ -65,6 +66,8 @@ type PermSetter struct {
 	aliasesPerTeam map[int64]map[string]bool // for each team, which aliases should have permissions
 
 	admins map[string]bool // list of admins that get onto each team
+
+	projectIDtoName map[int64]string
 }
 
 func NewPermSetter(conf Config) (*PermSetter, error) {
@@ -107,17 +110,18 @@ func NewPermSetter(conf Config) (*PermSetter, error) {
 	}
 
 	return &PermSetter{
-		conf:           conf,
-		db:             db,
-		asanaClient:    ac,
-		googleClient:   gc,
-		userIDtoEmail:  make(map[asana.UserID]string),
-		emailToUserID:  make(map[string]asana.UserID),
-		teams:          make(map[int64]bool),
-		teamIDtoName:   make(map[int64]string),
-		teamNameToID:   make(map[string]int64),
-		aliasesPerTeam: make(map[int64]map[string]bool),
-		admins:         make(map[string]bool),
+		conf:            conf,
+		db:              db,
+		asanaClient:     ac,
+		googleClient:    gc,
+		userIDtoEmail:   make(map[asana.UserID]string),
+		emailToUserID:   make(map[string]asana.UserID),
+		teams:           make(map[int64]bool),
+		teamIDtoName:    make(map[int64]string),
+		teamNameToID:    make(map[string]int64),
+		aliasesPerTeam:  make(map[int64]map[string]bool),
+		admins:          make(map[string]bool),
+		projectIDtoName: make(map[int64]string),
 	}, nil
 }
 
@@ -206,7 +210,7 @@ func (ps *PermSetter) SetPermsForTeams() error {
 						}
 					}
 					current[b] = true
-					if err := ps.LogAddition(b, teamID); err != nil {
+					if err := ps.LogTeamAddition(b, teamID); err != nil {
 						log.Fatal(err)
 					}
 				}
@@ -214,16 +218,88 @@ func (ps *PermSetter) SetPermsForTeams() error {
 
 			for cur, _ := range current {
 				if _, ok := belong[cur]; !ok {
-					ans, err := ps.IsLogged(ps.emailToUserID[cur], teamID)
+					ans, err := ps.IsLoggedOnTeam(ps.emailToUserID[cur], teamID)
 					if err != nil {
 						log.Fatal(err)
 					}
 					if ans {
-						if err := ps.RemoveFromLog(cur, teamID); err != nil {
-							return nil
+						if err := ps.RemoveFromTeamLog(cur, teamID); err != nil {
+							log.Fatal(err)
 						}
 						if err := ps.RemoveMemberFromAsanaTeam(cur, teamID); err != nil {
 							log.Fatal(err)
+						}
+						delete(current, cur)
+					}
+				}
+			}
+
+			projects := make(map[int64]*asana.Project)
+			if err := ps.FetchProjectsForTeam(teamID, projects); err != nil {
+				log.Fatal(err)
+			}
+
+			for _, project := range projects {
+				fmt.Printf("checking project %s\n", project.Name)
+				projBelong := make(map[string]bool)
+				subs := strings.FieldsFunc(project.Notes, func(c rune) bool {
+					return !unicode.IsLetter(c) && !unicode.IsNumber(c) && c != '@' && c != '_' && c != '.'
+				})
+				for _, sub := range subs {
+					if !strings.HasSuffix(sub, strings.Join([]string{"@", ps.conf.WorkspaceName}, "")) {
+						continue
+					}
+					if err := ps.GetGoogleGroupMembership(sub, projBelong); err != nil {
+						if strings.Contains(err.Error(), "Resource Not Found: groupKey, notFound") {
+							log.Printf("unable to find google group for %s in projectID %d\n", sub, project.ID)
+							continue
+						}
+						log.Fatal(err)
+					}
+				}
+				projCurrent := make(map[string]bool)
+				for _, m := range project.Members {
+					projCurrent[ps.userIDtoEmail[asana.UserID(m.ID)]] = true
+				}
+				for b, _ := range projBelong {
+					if _, ok := projCurrent[b]; !ok {
+						if _, ok := current[b]; !ok { // if already on team, no need to add to project
+							log.Printf("add %s to projectID %d\n", b, project.ID)
+							if err := ps.asanaClient.AddUsersToProject(&asana.ProjectRequest{
+								ProjectGID: fmt.Sprintf("%d", project.ID),
+								Members:    []string{b},
+								Workspace:  ps.MyOrgID}); err != nil {
+								if strings.Contains(err.Error(), "only_team_members_can_add_members") {
+									return nil
+								} else {
+									log.Fatal(err)
+								}
+							}
+							projCurrent[b] = true
+							if err := ps.LogProjectAddition(b, project.ID); err != nil {
+								log.Fatal(err)
+							}
+						}
+					}
+				}
+				for cur, _ := range projCurrent {
+					if _, ok := projBelong[cur]; !ok {
+						ans, err := ps.IsLoggedOnProject(ps.emailToUserID[cur], project.ID)
+						if err != nil {
+							log.Fatal(err)
+						}
+						if ans {
+							log.Printf("removing %s from projectID %d\n", cur, project.ID)
+							if err := ps.RemoveFromProjectLog(cur, project.ID); err != nil {
+								log.Fatal(err)
+							}
+							if err := ps.asanaClient.RemoveUsersFromProject(&asana.ProjectRequest{
+								ProjectGID: fmt.Sprintf("%d", project.ID),
+								Members:    []string{cur},
+								Workspace:  ps.MyOrgID}); err != nil {
+								log.Fatal(err)
+							}
+							delete(projCurrent, cur)
 						}
 					}
 				}
@@ -308,6 +384,32 @@ func (ps *PermSetter) FetchTeams() error {
 	return nil
 }
 
+func (ps *PermSetter) FetchProjectsForTeam(teamID int64, projects map[int64]*asana.Project) error {
+	pagesChan, _, err := ps.asanaClient.QueryForProjects(&asana.ProjectQuery{
+		Archived:    false,
+		WorkspaceID: ps.MyOrgID,
+		TeamID:      fmt.Sprintf("%d", teamID),
+	})
+
+	if err != nil {
+		return err
+	}
+
+	for page := range pagesChan {
+		if err := page.Err; err != nil {
+			log.Printf("couldn't read in page of projects, err: %v", err)
+			continue
+		}
+
+		for _, project := range page.Projects {
+			projects[project.ID] = project
+			ps.projectIDtoName[project.ID] = project.Name
+		}
+	}
+
+	return nil
+}
+
 func (ps *PermSetter) FetchUsersForTeam(teamID int64, users map[string]bool) error {
 	log.Printf("fetching users for team: %s (ID: %d)", ps.teamIDtoName[teamID], teamID)
 	usersPagesChan, _, err := ps.asanaClient.ListAllUsersInTeam(fmt.Sprintf("%v", teamID))
@@ -328,21 +430,46 @@ func (ps *PermSetter) FetchUsersForTeam(teamID int64, users map[string]bool) err
 	return nil
 }
 
-func (ps *PermSetter) RemoveFromLog(uname string, teamID int64) error {
+func (ps *PermSetter) RemoveFromTeamLog(uname string, teamID int64) error {
 	log.Printf("deleting entry for %s in team %s from the asanaSyncLog", uname, ps.teamIDtoName[teamID])
 	_, err := ps.db.Exec(`DELETE FROM asanaSyncLog WHERE user_id = ? and team_id = ?`, ps.emailToUserID[uname], teamID)
 	return err
 }
 
-func (ps *PermSetter) LogAddition(uname string, teamID int64) error {
+func (ps *PermSetter) LogTeamAddition(uname string, teamID int64) error {
 	log.Printf("inserting entry for %s in team %s to the asanaSyncLog", uname, ps.teamIDtoName[teamID])
 	_, err := ps.db.Exec(`INSERT IGNORE INTO asanaSyncLog (user_id, user_name, team_id, team_name) VALUES (?, ?, ?, ?)`, ps.emailToUserID[uname], uname, teamID, ps.teamIDtoName[teamID])
 	return err
 }
 
-func (ps *PermSetter) IsLogged(uid asana.UserID, teamID int64) (bool, error) {
+func (ps *PermSetter) IsLoggedOnTeam(uid asana.UserID, teamID int64) (bool, error) {
 	var d int64
 	err := ps.db.QueryRow(`SELECT user_id FROM asanaSyncLog WHERE asanaSyncLog.user_id = ? AND asanaSyncLog.team_id = ?`, uid, teamID).Scan(&d)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		} else {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (ps *PermSetter) RemoveFromProjectLog(uname string, projectID int64) error {
+	log.Printf("deleting entry for %s from project %s from the asanaProjectSyncLog", uname, ps.projectIDtoName[projectID])
+	_, err := ps.db.Exec(`DELETE FROM asanaProjectSyncLog WHERE user_id = ? and project_id = ?`, ps.emailToUserID[uname], projectID)
+	return err
+}
+
+func (ps *PermSetter) LogProjectAddition(uname string, projectID int64) error {
+	log.Printf("inserting entry for %s in project %s to the asanaProjectSyncLog", uname, ps.projectIDtoName[projectID])
+	_, err := ps.db.Exec(`INSERT IGNORE INTO asanaProjectSyncLog (user_id, user_name, project_id, project_name) VALUES (?, ?, ?, ?)`, ps.emailToUserID[uname], uname, projectID, ps.projectIDtoName[projectID])
+	return err
+}
+
+func (ps *PermSetter) IsLoggedOnProject(uid asana.UserID, projectID int64) (bool, error) {
+	var d int64
+	err := ps.db.QueryRow(`SELECT user_id FROM asanaProjectSyncLog WHERE asanaProjectSyncLog.user_id = ? AND asanaProjectSyncLog.project_id = ?`, uid, projectID).Scan(&d)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return false, nil
