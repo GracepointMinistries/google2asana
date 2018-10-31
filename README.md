@@ -1,5 +1,6 @@
 ## Overview
-*google2asana* is an app made to sync permissions from Google groups over to Asana teams.
+
+*google2asana* is an app made to sync permissions from Google groups over to Asana teams and projects.
 
 For groups that have their organizational structure tied to google groups (and use email aliases for various teams), this is a way to make it easy to give permissions for an Asana team to the people on a google alias.
 
@@ -14,6 +15,7 @@ In order that google2asana does not remove permissions for members that were add
 google2asana will keep its log of users added in a MySQL database. The DML to create the table is:
 ```
 create table asanaSyncLog(user_id BIGINT, user_name VARCHAR(255), team_id BIGINT, team_name VARCHAR(255), PRIMARY KEY (user_id, team_id))
+create table asanaProjectSyncLog (user_id BIGINT, user_name VARCHAR(255), project_id BIGINT, project_name VARCHAR(255), PRIMARY KEY (user_id, project_id))
 ```
 
 ## Asana Personal Access Token
@@ -38,7 +40,7 @@ Optionally, an ```ASANASYNC_GOOGLE_PEM_PATH``` environment variable can be defin
 For ```MYSQL_CONFIG```, see the [go-sql-driver documentation](https://github.com/go-sql-driver/mysql#dsn-data-source-name) to understand how to specify your MySQL database.
 
 ## Future improvements:
-Check descriptions for workspaces and projects and add any aliases in there to permission for said workspace or project (but no need to add entries for folks already in a higher level)
+make the team permission setting be multithreaded. Use lambda handler functions. introduce a cache for google alias lookup
 
 ## Contributing
 We use [govendor](https://github.com/kardianos/govendor) to vendor all our dependancies.
